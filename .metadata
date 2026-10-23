@@ -1,0 +1,408 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' as ll;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+
+void main() {
+  runApp(MyKasiSuKasiApp());
+}
+
+class MyKasiSuKasiApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'MyKasiSuKasi',
+      theme: ThemeData(primaryColor: Color(0xFF0B4F5C), scaffoldBackgroundColor: Color(0xFFF5F5F5)),
+      home: HomePage(),
+    );
+  }
+}
+
+class Car {
+  final String name;
+  final double consumption;
+  Car(this.name, this.consumption);
+}
+
+class RouteInfo {
+  final String name;
+  final double km;
+  final double tolls;
+  RouteInfo(this.name, this.km, this.tolls);
+}
+
+class HomePage extends StatefulWidget {
+  @override
+  _HomePageState createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  List<Car> cars = [
+    Car("Corolla Quest 2023 1.8 Plus Manual", 7.0),
+    Car("Corolla Quest 2022 1.8 XS Auto", 6.8),
+    Car("Corolla Cross 1.8 XS", 6.5),
+    Car("Toyota Starlet 1.4", 5.5),
+    Car("Suzuki Swift 1.2", 5.0),
+    Car("Hyundai Grand i10 1.2", 5.8),
+    Car("VW Polo Vivo 1.4", 6.2),
+    Car("Toyota Etios 1.5", 6.0),
+  ];
+  Car? selectedCar;
+
+  List<RouteInfo> routes = [
+    RouteInfo("Pretoria -> Mafikeng", 323, 173),
+    RouteInfo("Pretoria -> Mafikeng via Garankuwa", 340, 173),
+    RouteInfo("Pretoria -> Rustenburg", 113, 0),
+    RouteInfo("Pretoria -> Ottosdal", 249, 100),
+    RouteInfo("Pretoria -> Joburg", 62, 0),
+  ];
+  RouteInfo? selectedRoute;
+
+  TextEditingController pickupCtrl = TextEditingController(text: "Garankuwa, Pretoria");
+  TextEditingController dropCtrl = TextEditingController(text: "Mafikeng");
+  TextEditingController kmCtrl = TextEditingController(text: "323");
+
+  double petrolPrice = 30.25;
+  int passengers = 4;
+  int currentIndex = 0;
+  List<String> bookings = [];
+
+  ll.LatLng? pickupLatLng;
+  ll.LatLng? dropLatLng;
+
+  @override
+  void initState() {
+    super.initState();
+    selectedCar = cars[0];
+    selectedRoute = routes[0];
+    pickupLatLng = ll.LatLng(-25.6038, 28.0880); // Garankuwa
+    dropLatLng = ll.LatLng(-25.8653, 25.6447); // Mafikeng
+  }
+
+  Future<void> openInGoogleMaps() async {
+    final String origin = pickupCtrl.text.isEmpty ? "Garankuwa, Pretoria" : pickupCtrl.text;
+    final String dest = dropCtrl.text.isEmpty ? "Mafikeng" : dropCtrl.text;
+    final Uri url = Uri.parse('https://www.google.com/maps/dir/?api=1&origin=${Uri.encodeComponent(origin)}&destination=${Uri.encodeComponent(dest)}&travelmode=driving');
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> pickLocation(bool isPickup) async {
+    final result = await Navigator.push<ll.LatLng>(
+      context,
+      MaterialPageRoute(builder: (_) => MapPickerPage(isPickup: isPickup)),
+    );
+    if (result != null) {
+      String name = "Pinned Location";
+      try {
+        List<Placemark> places = await placemarkFromCoordinates(result.latitude, result.longitude);
+        if (places.isNotEmpty) {
+          name = "${places[0].locality ?? places[0].subAdministrativeArea ?? ''}, ${places[0].administrativeArea ?? ''}";
+          if (name.trim() == ",") name = "Pinned Location";
+        }
+      } catch (_) {}
+      setState(() {
+        if (isPickup) {
+          pickupLatLng = result;
+          pickupCtrl.text = name;
+        } else {
+          dropLatLng = result;
+          dropCtrl.text = name;
+        }
+        if (pickupLatLng != null && dropLatLng != null) {
+          double straight = Geolocator.distanceBetween(
+            pickupLatLng!.latitude, pickupLatLng!.longitude,
+            dropLatLng!.latitude, dropLatLng!.longitude,
+          ) / 1000;
+          double road = straight * 1.35; // road adjustment
+          kmCtrl.text = road.toStringAsFixed(0);
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Pinned: $name - ${kmCtrl.text} km auto-calculated")));
+    }
+  }
+
+  double get km => double.tryParse(kmCtrl.text) ?? selectedRoute!.km;
+  double get litres => km * selectedCar!.consumption / 100;
+  double get petrolCost => litres * petrolPrice;
+  double get totalCost => petrolCost + selectedRoute!.tolls;
+  double get pricePerPerson => (totalCost + 983) / 4;
+  double get totalIncome => pricePerPerson * passengers;
+  double get profit => totalIncome - totalCost;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Color(0xFF0B4F5C),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("MyKasiSuKasi", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 22)),
+            Text("Ride Kasi, Travel Far", style: TextStyle(color: Color(0xFFFF7A00), fontSize: 12)),
+          ],
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("Drop Your Location", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text("Tap field to open map, search or pin drop", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: () => pickLocation(true),
+                    child: AbsorbPointer(
+                      child: TextField(
+                        controller: pickupCtrl,
+                        decoration: InputDecoration(
+                          labelText: "Pickup - Tap to Pin on Map",
+                          prefixIcon: Icon(Icons.my_location, color: Color(0xFFFF7A00)),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          suffixIcon: Icon(Icons.map),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  GestureDetector(
+                    onTap: () => pickLocation(false),
+                    child: AbsorbPointer(
+                      child: TextField(
+                        controller: dropCtrl,
+                        decoration: InputDecoration(
+                          labelText: "Destination - Tap to Pin on Map",
+                          prefixIcon: Icon(Icons.location_on, color: Color(0xFF0B4F5C)),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          suffixIcon: Icon(Icons.map),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  TextField(
+                    controller: kmCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: "Distance in KM - Auto Calculated",
+                      prefixIcon: Icon(Icons.route, color: Color(0xFFFF7A00)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      suffixText: "km",
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: openInGoogleMaps,
+                          icon: Icon(Icons.map),
+                          label: Text("GOOGLE MAPS"),
+                          style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF0B4F5C), padding: EdgeInsets.all(14)),
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => setState(() {}),
+                          icon: Icon(Icons.calculate),
+                          label: Text("CALCULATE"),
+                          style: ElevatedButton.styleFrom(backgroundColor: Color(0xFFFF7A00), padding: EdgeInsets.all(14)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            Text("Choose Your Car", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+              child: DropdownButton<Car>(
+                isExpanded: true,
+                underline: SizedBox(),
+                value: selectedCar,
+                items: cars.map((c) => DropdownMenuItem(value: c, child: Text(c.name))).toList(),
+                onChanged: (v) => setState(() => selectedCar = v),
+              ),
+            ),
+            SizedBox(height: 16),
+            Text("Quick Routes", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+              child: DropdownButton<RouteInfo>(
+                isExpanded: true,
+                underline: SizedBox(),
+                value: selectedRoute,
+                items: routes.map((r) => DropdownMenuItem(value: r, child: Text("${r.name} (${r.km}km)"))).toList(),
+                onChanged: (v) {
+                  setState(() {
+                    selectedRoute = v;
+                    kmCtrl.text = v!.km.toStringAsFixed(0);
+                  });
+                },
+              ),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Color(0xFF0B4F5C), borderRadius: BorderRadius.circular(16)),
+              child: Column(
+                children: [
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Distance", style: TextStyle(color: Colors.white)), Text("${km.toStringAsFixed(0)} km", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]),
+                  SizedBox(height: 6),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Petrol Used", style: TextStyle(color: Colors.white)), Text("${litres.toStringAsFixed(2)}L", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Petrol Cost (R$petrolPrice/L)", style: TextStyle(color: Colors.white)), Text("R${petrolCost.toStringAsFixed(2)}", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Tolls", style: TextStyle(color: Colors.white)), Text("R${selectedRoute!.tolls}", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]),
+                  Divider(color: Colors.white38),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("BASE TOTAL", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), Text("R${totalCost.toStringAsFixed(2)}", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18))]),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            Text("Passengers: $passengers", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Slider(value: passengers.toDouble(), min: 1, max: 4, divisions: 3, activeColor: Color(0xFFFF7A00), onChanged: (v) => setState(() => passengers = v.toInt())),
+            SizedBox(height: 8),
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Color(0xFFFF7A00), width: 2)),
+              child: Column(
+                children: [
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Price Per Person"), Text("R${pricePerPerson.toStringAsFixed(0)}", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF0B4F5C)))]),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("Total Income ($passengers pax)"), Text("R${totalIncome.toStringAsFixed(0)}", style: TextStyle(fontWeight: FontWeight.bold))]),
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text("YOUR PROFIT", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green)), Text("R${profit.toStringAsFixed(0)}", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green, fontSize: 18))]),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  setState(() => bookings.add("${pickupCtrl.text} -> ${dropCtrl.text} - R${pricePerPerson.toStringAsFixed(0)} x $passengers"));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Booking Confirmed!")));
+                },
+                child: Text("Confirm Booking - R${pricePerPerson.toStringAsFixed(0)}", style: TextStyle(fontSize: 18)),
+                style: ElevatedButton.styleFrom(backgroundColor: Color(0xFFFF7A00), padding: EdgeInsets.all(16)),
+              ),
+            ),
+            SizedBox(height: 16),
+            if (bookings.isNotEmpty) ...[
+              Text("Your Bookings", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ...bookings.map((b) => Card(child: ListTile(title: Text(b), leading: Icon(Icons.check_circle, color: Colors.green)))).toList(),
+            ]
+          ],
+        ),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: currentIndex,
+        selectedItemColor: Color(0xFF0B4F5C),
+        unselectedItemColor: Colors.grey,
+        onTap: (i) => setState(() => currentIndex = i),
+        items: [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+          BottomNavigationBarItem(icon: Icon(Icons.directions_car), label: "Rides"),
+          BottomNavigationBarItem(icon: Icon(Icons.bookmark), label: "Bookings"),
+          BottomNavigationBarItem(icon: Icon(Icons.wallet), label: "Wallet"),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+        ],
+      ),
+    );
+  }
+}
+
+// MAP PICKER PAGE - PIN DROP + SEARCH
+class MapPickerPage extends StatefulWidget {
+  final bool isPickup;
+  MapPickerPage({required this.isPickup});
+  @override
+  _MapPickerPageState createState() => _MapPickerPageState();
+}
+
+class _MapPickerPageState extends State<MapPickerPage> {
+  MapController mapController = MapController();
+  ll.LatLng center = ll.LatLng(-25.6038, 28.0880);
+  ll.LatLng? picked;
+  TextEditingController searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    picked = center;
+  }
+
+  Future<void> searchLocation(String query) async {
+    try {
+      List<Location> locs = await locationFromAddress(query);
+      if (locs.isNotEmpty) {
+        ll.LatLng newPos = ll.LatLng(locs[0].latitude, locs[0].longitude);
+        mapController.move(newPos, 13);
+        setState(() => picked = newPos);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Location not found, try pin drop")));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.isPickup ? "Pick Pickup - Tap Map to Pin" : "Pick Destination - Tap Map to Pin"), backgroundColor: Color(0xFF0B4F5C)),
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: mapController,
+            options: MapOptions(
+              initialCenter: center,
+              initialZoom: 11,
+              onTap: (_, pos) => setState(() => picked = pos),
+            ),
+            children: [
+              TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.mykasisukasi'),
+              if (picked != null)
+                MarkerLayer(markers: [Marker(point: picked!, width: 60, height: 60, child: Icon(Icons.location_on, size: 50, color: Colors.red))]),
+            ],
+          ),
+          Positioned(
+            top: 10, left: 10, right: 10,
+            child: Container(
+              color: Colors.white,
+              child: TextField(
+                controller: searchCtrl,
+                decoration: InputDecoration(hintText: "Search e.g. Mafikeng, Rustenburg...", prefixIcon: Icon(Icons.search), border: OutlineInputBorder()),
+                onSubmitted: searchLocation,
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 20, left: 16, right: 16,
+            child: Text("Tap anywhere on map to drop pin. Or search above.", textAlign: TextAlign.center, style: TextStyle(backgroundColor: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.pop(context, picked),
+        label: Text("CONFIRM PIN"),
+        icon: Icon(Icons.pin_drop),
+        backgroundColor: Color(0xFFFF7A00),
+      ),
+    );
+  }
+}
